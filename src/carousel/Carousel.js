@@ -126,7 +126,7 @@ export default class Carousel extends Component {
         this._scrollOffsetRef = null;
         this._onScrollTriggered = true; // used when momentum is enabled to prevent an issue with edges items
         this._lastScrollDate = 0; // used to work around a FlatList bug
-        this._scrollEnabled = props.scrollEnabled !== false;
+        this._scrollEnabled = props.scrollEnabled === false ? false : true;
 
         this._initPositionsAndInterpolators = this._initPositionsAndInterpolators.bind(this);
         this._renderItem = this._renderItem.bind(this);
@@ -271,7 +271,7 @@ export default class Carousel extends Component {
         } else if (nextFirstItem !== this._previousFirstItem && nextFirstItem !== this._activeItem) {
             this._activeItem = nextFirstItem;
             this._previousFirstItem = nextFirstItem;
-            this._snapToItem(nextFirstItem, true, true, false, false);
+          this._snapToItem(nextFirstItem, false, true, false, false);
         }
     }
 
@@ -279,6 +279,7 @@ export default class Carousel extends Component {
         this._mounted = false;
         this.stopAutoplay();
         clearTimeout(this._apparitionTimeout);
+        clearTimeout(this._hackAndroidLoopScrollTimeout);
         clearTimeout(this._hackSlideAnimationTimeout);
         clearTimeout(this._enableAutoplayTimeout);
         clearTimeout(this._autoplayTimeout);
@@ -678,7 +679,7 @@ export default class Carousel extends Component {
     }
 
     _lockScroll () {
-        const { lockScrollTimeoutDuration } = this.props;
+      const { lockScrollTimeoutDuration } = this.props;
         clearTimeout(this._lockScrollTimeout);
         this._lockScrollTimeout = setTimeout(() => {
             this._releaseScroll();
@@ -708,32 +709,53 @@ export default class Carousel extends Component {
             repositionTo = index + dataLength;
         }
 
-        this._snapToItem(repositionTo, false, false, false, false);
+        this._snapToItem(repositionTo, false, false, false, false, true);
     }
 
-    _scrollTo (offset, animated = true) {
-        const { vertical } = this.props;
+    _scrollTo (offset, animated = true, repositioning = false) {
+        const { vertical, loop } = this.props;
         const wrappedRef = this._getWrappedRef();
 
         if (!this._mounted || !wrappedRef) {
             return;
         }
 
-        const specificOptions = this._needsScrollView() ? {
-            x: vertical ? 0 : offset,
-            y: vertical ? offset : 0
-        } : {
-            offset
+        const specificOptions = {
+          x: vertical ? 0 : offset,
+          y: vertical ? offset : 0,
+          offset
         };
         const options = {
             ...specificOptions,
             animated
         };
 
-        if (this._needsScrollView()) {
-            wrappedRef.scrollTo(options);
+        // Android need more time for repositioning when loop is enabled.
+        // Forcing lock till well past the scrollTo(Offset) call.
+        if (repositioning && loop && !IS_IOS) {
+          this._lockScroll();
+
+          clearTimeout(this._hackAndroidLoopScrollTimeout);
+          this._hackAndroidLoopScrollTimeout = setTimeout(() => {
+            this._lockScroll();
+
+            if (this._needsScrollView()) {
+              wrappedRef.scrollTo(options);
+            } else {
+              wrappedRef.scrollToOffset(options);
+            }
+
+            clearTimeout(this._hackAndroidLoopScrollTimeout);
+            this._hackAndroidLoopScrollTimeout = setTimeout(() => {
+              this._releaseScroll();
+            }, 100);
+          }, 100);
         } else {
-            wrappedRef.scrollToOffset(options);
+          if (this._needsScrollView()) {
+              wrappedRef.scrollTo(options);
+          } else {
+              wrappedRef.scrollToOffset(options);
+          }
         }
     }
 
@@ -789,8 +811,9 @@ export default class Carousel extends Component {
             }
         }
 
-        if (nextActiveItem === this._itemToSnapTo &&
-            scrollOffset === this._scrollOffsetRef) {
+        // Pixel precise offset check does not work well when scrolling fast,
+        // so using the range instead (scrollConditions)
+        if (nextActiveItem === this._itemToSnapTo && scrollConditions) {
             this._repositionScroll(nextActiveItem);
         }
 
@@ -951,7 +974,7 @@ export default class Carousel extends Component {
         }
     }
 
-    _snapToItem (index, animated = true, fireCallback = true, initial = false, lockScroll = true) {
+    _snapToItem (index, animated = true, fireCallback = true, initial = false, lockScroll = true, repositioning = false) {
         const { enableMomentum, onSnapToItem, onBeforeSnapToItem } = this.props;
         const itemsLength = this._getCustomDataLength();
         const wrappedRef = this._getWrappedRef();
@@ -993,7 +1016,7 @@ export default class Carousel extends Component {
             return;
         }
 
-        this._scrollTo(this._scrollOffsetRef, animated);
+        this._scrollTo(this._scrollOffsetRef, animated, repositioning);
 
         if (enableMomentum) {
             // iOS fix, check the note in the constructor
@@ -1115,7 +1138,7 @@ export default class Carousel extends Component {
             return;
         }
 
-        const scrollOffset = offset || (scrollPosition === 0 ? 1 : -1);
+      const scrollOffset = offset || (scrollPosition === 0 ? 1 : -1);
         this._scrollTo(scrollPosition + scrollOffset, false);
     }
 
